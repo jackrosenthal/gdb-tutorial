@@ -1,0 +1,28 @@
+CXX = clang
+SRCFILES = $(wildcard src/*.c)
+OBJFILES = $(patsubst src/%.c, bin/%.o, $(SRCFILES))
+OBJDEBUG = $(patsubst src/%.c, bin/%.debug.o, $(SRCFILES))
+OUTFILE = myprogram
+CXXFLAGS = -Wall -std=c11
+LDFLAGS = -lreadline
+
+all: $(OUTFILE)
+
+$(OUTFILE): $(OBJFILES)
+	$(CXX) $(LDFLAGS) $(OBJFILES) -o $(OUTFILE)
+
+bin/%.o: src/%.c
+	$(CXX) $(CXXFLAGS) -o $@ -c $<
+
+# 'make debug' depends on myprogram.debug. Make will check if this file
+# exists and is up to date, and if so, call the debugger.
+debug: $(OUTFILE).debug
+	gdb -tui $(OUTFILE).debug
+
+# 'make myprogram.debug' links the binary we are looking for.
+$(OUTFILE).debug: $(OBJDEBUG)
+	$(CXX) $(LDFLAGS) $(OBJDEBUG) -o $(OUTFILE).debug
+
+# This makes each individual object with debugging symbols
+bin/%.debug.o: src/%.c
+	$(CXX) $(CXXFLAGS) -ggdb3 -o $@ -c $<

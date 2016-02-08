@@ -1,0 +1,431 @@
+\documentclass[11pt]{article}
+\usepackage{fontspec}
+\usepackage[margin=25mm]{geometry}
+\usepackage{tcolorbox}
+\newtcolorbox{infobox}[1]%
+{colback=blue!5!white,colframe=blue!75!black,fonttitle=\large\sffamily\bfseries,title=#1}
+\newtcolorbox[auto counter]{listingbox}[2][]%
+{colback=green!5!white,colframe=green!75!black,fonttitle=\large\sffamily\bfseries,title=Listing
+\thetcbcounter: #2,#1}
+\newtcolorbox{termbox}%
+{colback=black!95!white,coltext=green!75!yellow,colframe=black}
+\usepackage{sectsty}
+\allsectionsfont{\bfseries\sffamily}
+\usepackage{minted}
+\setminted{autogobble}
+\setlength\parindent{0pt}
+\setlength\parskip{6pt plus 1pt minus 1pt}
+\title{\bfseries\sffamily Notes and Tutorial on GDB}
+\author{Jack Rosenthal}
+\date{CSM Linux Users Group}
+\begin{document}
+\maketitle
+\begin{infobox}{Note}
+    This isn't a complete reference, but an unprofessional handy source. You
+    might find out a lot more by reading the manual.
+\end{infobox}
+\tableofcontents
+\section{Introduction}
+\textbf{The GNU Debugger} (GDB) is an awesome tool for debugging your programs written
+in C, C++, FORTRAN (please don't), and plenty of other compiled languages. You
+can use it by running \texttt{gdb} from the command line.
+
+\subsection{Compiling your programs for GDB}
+GDB can make use of special symbols in your program to help you debug. Add the
+\texttt{-ggdb3} flag to include these symbols. Example below:
+\begin{termbox}
+\begin{verbatim}
+$ gcc -ggdb3 -std=c11 -o program.debug program.c
+\end{verbatim}
+\end{termbox}
+This compiler flag works with \texttt{gcc}, \texttt{clang}, or any of their
+related compilers (\texttt{g++}, etc.). Generally, you will only want to use
+this flag for debugging, as it not only embeds the source of your program in
+the binary, but also increases the size of the binary significantly. The rest
+of this document assumes you have compiled with this flag when debugging.
+
+Many people add a \texttt{debug} target to their \texttt{Makefile}, this allows
+them to compile their program for debugging and start the debugger simply
+typing \texttt{make debug}. The following listing contains a complete
+\texttt{Makefile} example, it may be overkill for small projects.
+\begin{listingbox}{A complete \texttt{Makefile} example}
+    \inputminted{Makefile}{MakefileExample}
+\end{listingbox}
+This \texttt{Makefile} compliles a multifile project with all of the source
+located at \texttt{src/*.c}.
+
+\clearpage
+\subsection{A basic example}
+A coworker has handed you a simple C program they wrote, but is segfaulting.
+They are fairly new to C programming\footnote{Your coworker also used the
+$1^{\mathrm{st}}$ edition K\&R C book to learn} and would like your help
+debugging. The program they wrote follows:
+\begin{listingbox}[left=1cm]{Your coworker's program (\texttt{prog1.c})}
+    \inputminted[linenos]{c}{prog1.c}
+\end{listingbox}
+Can you spot the bug? Not easy without a debugger. Let's throw it in
+\texttt{gdb}! Start off by compiling with debugging symbols and starting
+\texttt{gdb} on the program.
+\begin{termbox}
+\begin{verbatim}
+$ gcc -ggdb3 -o prog1.debug prog1.c
+$ gdb prog1.debug
+\end{verbatim}
+\end{termbox}
+\clearpage
+When \texttt{gdb} first starts, you will see this:
+\begin{termbox}
+\begin{verbatim}
+GNU gdb (GDB) 7.10.1
+Copyright (C) 2015 Free Software Foundation, Inc.
+...
+For help, type "help".
+Type "apropos word" to search for commands related to "word"...
+Reading symbols from prog1.debug...done.
+(gdb)
+\end{verbatim}
+\end{termbox}
+\texttt{gdb} has near a gazillion commands, but we are going to want to use
+either \texttt{start} or \texttt{run} here. \texttt{start} will create a
+breakpoint at the start of \texttt{main} before running, whereas \texttt{run}
+will run right away. If we wanted the program to read a file on standard input,
+we could use the syntax \texttt{run < myfile} to read it. Go ahead and type
+\texttt{run}, and give it the input ``\texttt{Hello, World!}'':
+\begin{termbox}
+\begin{verbatim}
+(gdb) run
+Starting program: prog1.debug
+What would you like me to print? Hello, World!
+
+Program received signal SIGSEGV, Segmentation fault.
+0x00007ffff7aa0eb0 in __GI__IO_getline_info () from /usr/lib/libc.so.6
+\end{verbatim}
+\end{termbox}
+Yikes! What caused that? We can generate a backtrace to see where this
+happened. To do this, type \texttt{backtrace} (or, if you are lazy, \texttt{bt}
+works too).
+\begin{termbox}
+\begin{verbatim}
+(gdb) bt
+#0 0x00007ffff7aa0eb0 in __GI__IO_getline_info () from /usr/lib/libc.so.6
+#1 0x00007ffff7a9fe1d in fgets () from /usr/lib/libc.so.6
+#2 0x0000000000400650 in read_str_buf (buf_sz=...) at prog1.c:12
+#3 0x0000000000400680 in main (argc=1, argv=0x7fffffffe7e8) at prog1.c:24
+\end{verbatim}
+\end{termbox}
+Well, obviously it was at that \texttt{fgets} on line 12. Let's \texttt{kill}
+the program and restart it. We'll \texttt{break} at the start of
+\texttt{read\_str\_buf} to inspect what may be happening there.
+\begin{termbox}
+\begin{verbatim}
+(gdb) break read_str_buf
+Breakpoint 1 at 0x400622: file prog1.c, line 11.
+(gdb) run
+Starting program: prog1.debug
+
+Breakpoint 1, read_str_buf (buf_sz=...) at prog1.c:11
+11          buf = malloc(buf_sz);
+\end{verbatim}
+\end{termbox}
+Next, let's print some variables and step through some lines. We are going to
+use a few commands:
+\begin{tabular}{l l}
+    \texttt{print \emph{varname}} & Print the value of \texttt{\emph{varname}},
+    can be abbreviated to \texttt{p} \\
+    \texttt{next} & Go to the next line, can be abbreviated to \texttt{n} \\
+\end{tabular}
+\begin{termbox}
+\begin{verbatim}
+(gdb) print buf_sz
+$1 = 18446744071562067968
+(gdb) next
+12          fgets(buf, buf_sz, stdin);
+(gdb) print buf
+$2 = 0x0
+(gdb) next
+What would you like me to print? Hello, World?
+
+Program received signal SIGSEGV, Segmentation fault.
+0x00007ffff7aa0eb0 in __GI__IO_getline_info () from /usr/lib/libc.so.6
+\end{verbatim}
+\end{termbox}
+Hopefully you said ``Hey that's it, \texttt{malloc} returned \texttt{NULL}''
+when you printed \texttt{buf}. You can go ahead and type \texttt{quit} now, we
+will come back to this example later.
+
+Brownie points are available if you can name why:
+\begin{enumerate}
+    \item Even if the program worked, and allocated a reasonable amount of
+        memory (say 1024), it would still leak memory.
+    \item The prompt line did not print until we reached the \texttt{fgets}
+    \item \texttt{buf\_sz} was 18446744071562067968, not 2147483648
+    \item If line 12 was changed to read:
+        \begin{minted}{c}
+            buf = fgets(buf, buf_sz, stdin);
+        \end{minted}
+        the program would not segfault until line 25.
+\end{enumerate}
+\subsection{The Terminal User Interface}
+Yes. \texttt{gdb} has a nice terminal user interface that you can access by
+starting \texttt{gdb} with the \texttt{-tui} flag. This allows you to view each
+line in the source code you are stepping through in a nice box above the
+debugger. Sometimes the interface will get messed up and you will need to
+redraw, simply type Ctrl+L to redraw it.
+
+\section{Basic Features}
+\subsection{Stepping through your code}
+For stepping through your code, you will want to use the \texttt{step},
+\texttt{next}, and \texttt{continue} (abbreviated to \texttt{s}, \texttt{n},
+and \texttt{c}) commands.
+
+\begin{itemize}
+    \item The \texttt{step} command will execute whatever is on the current line
+        \emph{stepping into function calls} if there are any.
+    \item The \texttt{next} command will execute whatever is on the current
+        line \emph{continuing through function calls} if there are any.
+    \item The \texttt{continue} command will keep running your code until it
+        reaches a breakpoint.
+\end{itemize}
+
+Using the program from earlier, here is an example. You may find it
+helpful to use the TUI, so you can see which line you are at visually.
+\begin{termbox}
+\begin{verbatim}
+(gdb) start
+Temporary breakpoint 1 at 0x400669: file prog1.c, line 23.
+Starting program: prog1.debug
+
+Temporary breakpoint 1, main (argc=1, argv=0x7fffffffe7e8) at prog1.c:23
+23              printf("What would you like me to print? ");
+(gdb) next
+24              str = read_str_buf(1<<31);
+(gdb) step
+read_str_buf (buf_sz=18446744071562067968) at prog1.c:11
+11          buf = malloc(buf_sz);
+(gdb) next
+12          buf = fgets(buf, buf_sz - 1, stdin);
+(gdb) next
+What would you like me to print? Hello, World?
+
+Program received signal SIGSEGV, Segmentation fault.
+0x00007ffff7aa0eb0 in __GI__IO_getline_info () from /usr/lib/libc.so.6
+\end{verbatim}
+\end{termbox}
+Notice how we used \texttt{step} to step into the \texttt{read\_str\_buf}
+function call. If we used \texttt{next}, it would silently run that function without
+taking us through it.
+
+\subsection{Working with Variables}
+\texttt{gdb} gives you full control of your variables at any time.
+
+\begin{tabular}{l l}
+    \texttt{print \emph{varname}} & Print the value of \texttt{\emph{varname}},
+    can be abbreviated to \texttt{p} \\
+    \texttt{set \emph{varname}=\emph{value}} & Set \texttt{\emph{varname}} to
+    \texttt{\emph{value}} \\
+    \texttt{print \emph{varname}=\emph{value}} & Set \texttt{\emph{varname}} to
+    \texttt{\emph{value}} and print it \\
+\end{tabular}
+
+\texttt{\emph{value}} can be another variable.
+
+To change frames, type \texttt{backtrace} to find the frame number to change
+to, then type \texttt{frame \emph{n}} to change to frame \texttt{\emph{n}}.
+
+To list all variables in this frame, type \texttt{info locals}. To list the
+arguments to this frame, type \texttt{info args}. To get way too much
+information about this frame, type \texttt{info frame}.
+
+\begin{listingbox}[left=1cm]{\texttt{prog2.c}}
+    \inputminted[linenos]{c}{prog2.c}
+\end{listingbox}
+\clearpage
+
+\subsection{Breakpoints}
+To set a breakpoint, use the incredibly powerful \texttt{break} command. The
+general syntax is:
+\begin{center}
+    \texttt{break [$\langle \mathrm{location} \rangle$] [if $\langle
+    \mathrm{condition} \rangle$]}
+\end{center}
+where $\langle \mathrm{location} \rangle$ can be:
+
+\begin{tabular}{ l  l }
+    A line number (current file assumed) & \texttt{lineno} \\
+    A file name and line number & \texttt{file.c:lineno} \\
+    A function name & \texttt{my\_function} \\
+    A function name with namespace (for C++) & \texttt{std::my\_function} \\
+    A function with types (for overloading in C++) & \texttt{my\_function(int)} \\
+    The address of the program counter & \texttt{*0xfedcba76} \\
+\end{tabular}
+
+and $\langle \mathrm{condition} \rangle$ can be any valid conditional syntax in
+your language (eg. \texttt{i == 32}). If the location is not specified, the
+current program counter is assumed.
+
+For our example, we are going to use the \texttt{prog2.c} program, which
+reimplements \texttt{strdup}, but with a bug. The \texttt{main} function prints
+all of the user's environment variables after they've been through
+\texttt{my\_strdup} so you can see the bug (compare to the output of
+\texttt{env}).
+
+Load up this program in \texttt{gdb} and issue the following commands. Keep
+pressing \texttt{c} whenever you reach a breakpoint, and notice how breakpoint
+2 will only trigger when the first letter of the environment variable is H.
+Neato!
+
+\begin{termbox}
+\begin{verbatim}
+(gdb) break my_strlen
+(gdb) break my_strdup if *in == 'H'
+(gdb) run
+\end{verbatim}
+\end{termbox}
+
+\subsection{Watchpoints}
+You may want to break the program whenever a variable is changed or read. This
+is called setting a watchpoint. The syntax is:
+
+\begin{tabular}{l l}
+    \texttt{watch \emph{x}} & break whenever \texttt{\emph{x}} is changed. \\
+    \texttt{rwatch \emph{x}} & break whenever \texttt{\emph{x}} is read. \\
+    \texttt{awatch \emph{x}} & break upon read or write \\
+\end{tabular}
+
+\subsection{Disabling and Enabling \{Break,Watch\}points}
+
+If you are tired of breaking, you may want to disable a specific breakpoint. To
+list breakpoints and their associated number \texttt{\emph{n}}, type
+\texttt{info breakpoints}. Then, type \texttt{disable \emph{n}} or
+\texttt{enable \emph{n}}.
+
+\section{Advanced Magical Wizardry}
+
+\subsection{Calling Functions}
+\texttt{gdb} allows you to call one of your functions, or any function linked
+to your program. Use the \texttt{call} command. Here is an example:
+
+\begin{termbox}
+\begin{verbatim}
+(gdb) start
+Temporary breakpoint 1 at 0x4006b7: file prog2.c, line 28.
+Starting program: prog2.debug
+
+Temporary breakpoint 1, main (argc=1, argv=0x7fffffffe7c8) at prog2.c:28
+28          char **p = environ;
+(gdb) call my_strlen("Hello, World!")
+$1 = 13
+\end{verbatim}
+\end{termbox}
+
+\subsection{Examining Memory}
+\texttt{gdb} has an amazing command, \texttt{x}, but few people actually remember how
+to use it without typing \texttt{help x}. Here is its syntax:
+
+\begin{center}
+    \texttt{x/$\langle\mathrm{amount}\rangle\langle\mathrm{format}\rangle\langle\mathrm{size}\rangle$
+    $\langle\mathrm{variable\ or\ address}\rangle$}
+\end{center}
+
+$\langle\mathrm{amount}\rangle$ is the amount of objects of the specified size
+to print. It will default to 1 if you don't specify it.
+
+$\langle\mathrm{format}\rangle$ is a single character that specifies how it
+should look when printed. Here are the different options:
+
+\begin{tabular}{l l}
+    \texttt{o} & octal \\
+    \texttt{x} & hexadecimal \\
+    \texttt{d} & decimal \\
+    \texttt{u} & unsigned decimal \\
+    \texttt{t} & binary \\
+    \texttt{f} & float \\
+    \texttt{a} & address \\
+    \texttt{i} & instruction \\
+    \texttt{c} & char \\
+    \texttt{s} & string \\
+    \texttt{z} & zero padded hexadecimal \\
+\end{tabular}
+
+$\langle\mathrm{size}\rangle$ specifies the size of the data to be printed. It
+is also a single character. Here are the different options:
+
+\begin{tabular}{l l}
+    \texttt{b} & byte (8 bits) \\
+    \texttt{h} & half word (16 bits) \\
+    \texttt{w} & word (32 bits) \\
+    \texttt{g} & giant word (64 bits) \\
+\end{tabular}
+
+That was awfully complex. For an example, let's examine \texttt{prog3.c}.
+
+\begin{listingbox}[left=1cm]{\texttt{prog3.c}}
+    \inputminted[linenos]{c}{prog3.c}
+\end{listingbox}
+
+Here are some examples:
+\begin{termbox}
+\begin{verbatim}
+(gdb) start
+Temporary breakpoint 1 at 0x400555: file prog3.c, line 6.
+Starting program: prog3.debug
+
+Temporary breakpoint 1, main (argc=1, argv=0x7fffffffe7c8) at prog3.c:6
+6           char *str = strdup("Hello, World!\n");
+(gdb) n
+7           int x = 42;
+(gdb) x/s str
+0x601010:       "Hello, World!\n"
+(gdb) x/c str
+0x601010:       72 'H'
+(gdb) x/6c str
+0x601010:       72 'H'  101 'e' 108 'l' 108 'l' 111 'o' 44 ','
+(gdb) n
+8           int *y = &x;
+(gdb) n
+9           double pi = 3.1415926535897932384;
+(gdb) x/tw y
+0x7fffffffe6c4: 00000000000000000000000000101010
+(gdb) n
+10          double *pi_ptr = &pi;
+(gdb) n
+11          if (*str && x && *y && *(int *)pi_ptr)
+(gdb) x/tg pi_ptr
+0x7fffffffe6b8: 0100000000001001001000011111101101010100010001000010110100011000
+\end{verbatim}
+\end{termbox}
+
+\subsection{When things get so bad to the point where you are dealing with assembly code}
+
+You may want to \texttt{disassemble} part of the program:
+\begin{termbox}
+\begin{verbatim}
+(gdb) disassemble main
+Dump of assembler code for function main:
+   0x0000000000400546 <+0>:     push   %rbp
+   0x0000000000400547 <+1>:     mov    %rsp,%rbp
+   0x000000000040054a <+4>:     sub    $0x40,%rsp
+   0x000000000040054e <+8>:     mov    %edi,-0x34(%rbp)
+...
+\end{verbatim}
+\end{termbox}
+
+Maybe examine the registers:
+\begin{termbox}
+\begin{verbatim}
+(gdb) info registers
+rax            0x601010         6295568
+rbx            0x0              0
+rcx            0xa21646c726f57  2851464966991703
+rdx            0x0              0
+rsi            0x400657         4195927
+...
+\end{verbatim}
+\end{termbox}
+
+You can also use \texttt{nexti} and \texttt{stepi} to step instructions (rather
+than lines).
+
+You my friend, have achieved GDB wizard status.
+
+\end{document}
