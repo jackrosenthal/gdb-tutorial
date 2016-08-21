@@ -1,0 +1,7 @@
+Title: Tutorial on GDB
+Description: A tutorial on how to master the arts of debugging your C/C++ programs with GDB.
+Date: 2016-02-08
+Thumbnail: thumbnail.png
+Files:
+    NotesPDF: notes.pdf
+    LaTeX: notes.tex
